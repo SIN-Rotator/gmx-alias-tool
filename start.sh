@@ -19,23 +19,42 @@ stop_old() {
     fi
 }
 
+stop_tunnel_only() {
+    if [ -f "$TUNNEL_PID_FILE" ]; then
+        kill $(cat "$TUNNEL_PID_FILE") 2>/dev/null && echo "Old tunnel stopped"
+        rm -f "$TUNNEL_PID_FILE"
+    fi
+}
+
+extract_tunnel_url() {
+    cloudflared tunnel --url http://localhost:8001 2>&1 | while IFS= read -r line; do
+        echo "$line" >> "$TUNNEL_LOG"
+        TURL=$(echo "$line" | grep -o 'https://[a-z0-9-]*\.trycloudflare\.com' | head -1)
+        if [ -n "$TURL" ]; then
+            echo "$TURL" > "$TUNNEL_URL_FILE"
+            echo "$TURL"
+            break
+        fi
+    done
+}
+
 case "${1:-start}" in
     stop)
         stop_old
         exit 0
         ;;
     tunnel-only)
-        echo "Starting Cloudflare Tunnel only (server must be running on port 8001)..."
-        stop_old
-        nohup cloudflared tunnel --url http://localhost:8001 > "$TUNNEL_LOG" 2>&1 &
-        echo $! > "$TUNNEL_PID_FILE"
+        echo "Starting Cloudflare Tunnel (server must already be running on port 8001)..."
+        stop_tunnel_only
+        extract_tunnel_url &
+        TUNNEL_PID=$!
+        echo $TUNNEL_PID > "$TUNNEL_PID_FILE"
         sleep 5
-        TUNNEL_URL=$(grep -o 'https://[a-z0-9-]*\.trycloudflare\.com' "$TUNNEL_LOG" | head -1)
-        if [ -n "$TUNNEL_URL" ]; then
-            echo "$TUNNEL_URL" > "$TUNNEL_URL_FILE"
-            echo "✅ Tunnel: $TUNNEL_URL → http://localhost:8001"
-            echo "   API:  $TUNNEL_URL/alias/rotate"
-            echo "   Docs: $TUNNEL_URL/docs"
+        if [ -f "$TUNNEL_URL_FILE" ]; then
+            TURL=$(cat "$TUNNEL_URL_FILE")
+            echo "✅ Tunnel: $TURL → http://localhost:8001"
+        else
+            echo "⏳ Tunnel starting... URL saved to $TUNNEL_URL_FILE when ready"
         fi
         exit 0
         ;;
@@ -61,23 +80,21 @@ fi
 echo "✅ Server running on http://localhost:8001"
 
 echo "Starting Cloudflare Tunnel..."
-nohup cloudflared tunnel --url http://localhost:8001 > "$TUNNEL_LOG" 2>&1 &
-echo $! > "$TUNNEL_PID_FILE"
+extract_tunnel_url &
+TUNNEL_PID=$!
+echo $TUNNEL_PID > "$TUNNEL_PID_FILE"
 sleep 5
 
-TUNNEL_URL=$(grep -o 'https://[a-z0-9-]*\.trycloudflare\.com' "$TUNNEL_LOG" | head -1)
-if [ -n "$TUNNEL_URL" ]; then
-    echo "$TUNNEL_URL" > "$TUNNEL_URL_FILE"
+if [ -f "$TUNNEL_URL_FILE" ]; then
+    TUNNEL_URL=$(cat "$TUNNEL_URL_FILE")
     echo ""
     echo "═════════════════════════════════════════════════════════"
     echo "  🚀 GMX Alias Tool running!"
     echo "  Local:  http://localhost:8001"
     echo "  Remote: $TUNNEL_URL"
     echo "  Docs:   $TUNNEL_URL/docs"
-    echo "  Health: curl $TUNNEL_URL/health"
     echo "═════════════════════════════════════════════════════════"
 else
-    echo "⚠️  Tunnel URL not found yet. Check $TUNNEL_LOG"
+    echo "⚠️  Waiting for tunnel URL... Check $TUNNEL_URL_FILE"
     echo "   Local API: http://localhost:8001"
-    echo "   To restart tunnel: $0 tunnel-only"
 fi
