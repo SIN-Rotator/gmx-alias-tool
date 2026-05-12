@@ -1644,32 +1644,22 @@ class GmxService:
                 delete_info = await self._find_delete_icon_coords(client, session_id)
                 if delete_info:
                     await self._cdp_click(client, session_id, delete_info['x'], delete_info['y'])
-                    await asyncio.sleep(5)
+                    await asyncio.sleep(2)
 
-                    # Try CDP JS click on dialog OK button
-                    ok_clicked = False
-                    for btn_text in ["OK", "ok", "Löschen", "Ja", "Bestätigen", "Abbrechen", "LÖSCHEN"]:
-                        js_result = await client.evaluate(session_id, f"""(function() {{
-                            var all = document.querySelectorAll('button, input[type="button"], input[type="submit"], a, .btn, [role="button"], .wicket-modal .button');
-                            for (var i = 0; i < all.length; i++) {{
-                                var t = (all[i].textContent || all[i].value || '').trim().toUpperCase();
-                                var inner = all[i].innerText || '';
-                                if (t === '{btn_text}'.toUpperCase() || inner.trim().toUpperCase() === '{btn_text}'.toUpperCase()) {{
-                                    all[i].click();
-                                    all[i].dispatchEvent(new MouseEvent('click', {{bubbles: true, composed: true, isTrusted: true}}));
-                                    return {{found: true, text: t}};
-                                }}
-                            }}
-                            return {{found: false}};
-                        }})()""", return_by_value=True)
-                        if js_result.get("result", {}).get("value", {}).get("found"):
-                            ok_clicked = True
-                            logger.info(f"Delete dialog OK clicked via CDP JS: {js_result['result']['value']['text']}")
-                            break
+                    ok_clicked = await client.evaluate(session_id, """(function() {
+                        try { confirm = function() { return true; }; alert = function() {}; return true; } catch(e) { return false; }
+                    })()""", return_by_value=True)
+
+                    try:
+                        await client.send_to_session(session_id, "Page.handleJavaScriptDialog", {"accept": True})
+                        logger.info("Accepted JS dialog via CDP")
+                        ok_clicked = True
+                    except Exception:
+                        pass
 
                     if ok_clicked:
-                        logger.info(f"Delete dialog OK clicked via CDP JS")
-                        await asyncio.sleep(3)
+                        logger.info("Delete dialog accepted via CDP")
+                        await asyncio.sleep(4)
                         if await self._verify_alias_in_iframe(
                             client, session_id, alias_text,
                             present=False, max_wait_s=8.0,
