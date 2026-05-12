@@ -1719,19 +1719,19 @@ class GmxService:
                                     "execution_time": f"{time.time() - start_time:.2f}s",
                                     "error": "GMX Chrome window not found",
                                 }
-                    except Exception:
-                        steps_failed.append("cua_confirm_error")
-                        logger.warning("CUA confirm error — skip create")
-                        return {
-                            "status": "partial",
-                            "deleted_alias": None,
-                            "created_alias": None,
-                            "created_alias_name": new_alias_name,
-                            "steps_completed": steps_completed,
-                            "steps_failed": steps_failed,
-                            "execution_time": f"{time.time() - start_time:.2f}s",
-                            "error": "CUA confirm error",
-                        }
+                        except Exception:
+                            steps_failed.append("cua_confirm_error")
+                            logger.warning("CUA confirm error — skip create")
+                            return {
+                                "status": "partial",
+                                "deleted_alias": None,
+                                "created_alias": None,
+                                "created_alias_name": new_alias_name,
+                                "steps_completed": steps_completed,
+                                "steps_failed": steps_failed,
+                                "execution_time": f"{time.time() - start_time:.2f}s",
+                                "error": "CUA confirm error",
+                            }
                 else:
                     steps_failed.append("trash_icon_not_found")
             else:
