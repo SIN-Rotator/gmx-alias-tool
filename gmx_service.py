@@ -1643,19 +1643,13 @@ class GmxService:
                 # Find delete icon (now visible after hover)
                 delete_info = await self._find_delete_icon_coords(client, session_id)
                 if delete_info:
+                    await client.evaluate(session_id, 'window.confirm = function() { return true; }; window.alert = function() {};', return_by_value=True)
+
                     await self._cdp_click(client, session_id, delete_info['x'], delete_info['y'])
-                    await asyncio.sleep(2)
+                    await asyncio.sleep(3)
 
-                    ok_clicked = await client.evaluate(session_id, """(function() {
-                        try { confirm = function() { return true; }; alert = function() {}; return true; } catch(e) { return false; }
-                    })()""", return_by_value=True)
-
-                    try:
-                        await client.send_to_session(session_id, "Page.handleJavaScriptDialog", {"accept": True})
-                        logger.info("Accepted JS dialog via CDP")
-                        ok_clicked = True
-                    except Exception:
-                        pass
+                    ok_clicked = True
+                    logger.info("Delete dialog bypassed via confirm() override")
 
                     if ok_clicked:
                         logger.info("Delete dialog accepted via CDP")
