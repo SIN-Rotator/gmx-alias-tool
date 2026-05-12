@@ -135,7 +135,7 @@ class GmxService:
         await client.connect()
         
         # Finde das GMX Tab spezifisch — nicht einfach das erste Page-Target
-targets = await client.get_targets()
+        targets = await client.get_targets()
         target = None
 
         for t in reversed(targets):
@@ -1529,9 +1529,11 @@ targets = await client.get_targets()
                     }
 
                 if current_url:
-                    logger.info(f"Verify miss — force-reload page: {current_url[:80]}")
-                    await client.navigate(session_id, current_url)
-                    await asyncio.sleep(5)
+                    logger.info(f"Verify miss — full refresh cycle")
+                    await client.navigate(session_id, "https://www.gmx.net/")
+                    await asyncio.sleep(3)
+                    await client.navigate(session_id, "https://bap.navigator.gmx.net/mail_settings")
+                    await asyncio.sleep(6)
                     ok = await self._verify_alias_in_iframe(
                         client, session_id, alias_email, present=True, max_wait_s=8.0,
                     )
@@ -1644,43 +1646,92 @@ targets = await client.get_targets()
                     await self._cdp_click(client, session_id, delete_info['x'], delete_info['y'])
                     await asyncio.sleep(3)
 
-                    # CUA click OK button
-                    import subprocess as sp
-                    res = sp.run(
-                        ["cua-driver", "call", "list_windows"],
-                        input=json.dumps({"query": "Chrome"}),
-                        capture_output=True, text=True, timeout=10
-                    )
-                    try:
-                        wd = json.loads(res.stdout)
-                        cua_pid, cua_wid = None, None
-                        for w in wd.get('windows', []):
-                            if w.get('app_name') == 'Google Chrome' and 'GMX' in w.get('title', '') and w.get('is_on_screen'):
-                                cua_pid = w['pid']; cua_wid = w['window_id']
-                                break
-                        if cua_pid and cua_wid:
-                            ok = await self._cua_click_ok_button(cua_pid, cua_wid)
-                            if ok:
-                                # Ehrliche Verifikation: alias_text ist die volle
-                                # "name@gmx.de" Adresse. Wir warten bis sie WEG ist.
-                                # `_find_alias_coords_in_iframe` reicht NICHT, weil
-                                # nach Löschung ggf. ein ANDERER Alias zurückkommt
-                                # und wir denken fälschlich, der zu löschende sei
-                                # noch da (oder umgekehrt).
-                                if await self._verify_alias_in_iframe(
-                                    client, session_id, alias_text,
-                                    present=False, max_wait_s=8.0,
-                                ):
-                                    deleted_alias = alias_text
-                                    steps_completed.append("alias_deleted")
-                                else:
-                                    steps_failed.append("alias_delete_verify")
-                            else:
-                                steps_failed.append("confirm_button_not_found")
+                    # Try CDP JS click on dialog OK button (no CUA needed)
+                    ok_clicked = False
+                    for btn_text in ["OK", "ok", "Löschen", "Ja", "Bestätigen"]:
+                        js_result = await client.evaluate(session_id, f"""(function() {{
+                            var btns = document.querySelectorAll('button, input[type="button"], input[type="submit"], a.btn');
+                            for (var i = 0; i < btns.length; i++) {{
+                                var t = (btns[i].textContent || btns[i].value || '').trim();
+                                if (t === '{btn_text}') {{ btns[i].click(); return true; }}
+                            }}
+                            return false;
+                        }})()""", return_by_value=True)
+                        if js_result.get("result", {}).get("value"):
+                            ok_clicked = True
+                            break
+
+                    if ok_clicked:
+                        logger.info(f"Delete dialog OK clicked via CDP JS")
+                        await asyncio.sleep(3)
+                        if await self._verify_alias_in_iframe(
+                            client, session_id, alias_text,
+                            present=False, max_wait_s=8.0,
+                        ):
+                            deleted_alias = alias_text
+                            steps_completed.append("alias_deleted")
                         else:
-                            steps_failed.append("cua_window_not_found")
+                            steps_failed.append("alias_delete_verify")
+                    else:
+                        # Fallback: CUA (original)
+                        logger.info("CDP JS OK click failed — trying CUA")
+                        import subprocess as sp
+                        res = sp.run(
+                            ["cua-driver", "call", "list_windows"],
+                            input=json.dumps({"query": "Chrome"}),
+                            capture_output=True, text=True, timeout=10
+                        )
+                        try:
+                            wd = json.loads(res.stdout)
+                            cua_pid, cua_wid = None, None
+                            for w in wd.get('windows', []):
+                                if w.get('app_name') == 'Google Chrome' and 'GMX' in w.get('title', '') and w.get('is_on_screen'):
+                                    cua_pid = w['pid']; cua_wid = w['window_id']
+                                    break
+                            if cua_pid and cua_wid:
+                                ok = await self._cua_click_ok_button(cua_pid, cua_wid)
+                                if ok:
+                                    if await self._verify_alias_in_iframe(
+                                        client, session_id, alias_text,
+                                        present=False, max_wait_s=8.0,
+                                    ):
+                                        deleted_alias = alias_text
+                                        steps_completed.append("alias_deleted")
+                                    else:
+                                        steps_failed.append("alias_delete_verify")
+                                else:
+                                    steps_failed.append("confirm_button_not_found")
+                                    logger.warning("Delete confirm button not found — skip create")
+                                    return {
+                                        "status": "partial", "deleted_alias": None, "created_alias": None,
+                                        "created_alias_name": new_alias_name,
+                                        "steps_completed": steps_completed, "steps_failed": steps_failed,
+                                        "execution_time": f"{time.time() - start_time:.2f}s",
+                                        "error": "Delete dialog OK button not found",
+                                    }
+                            else:
+                                steps_failed.append("cua_window_not_found")
+                                logger.warning("CUA window not found — skip create")
+                                return {
+                                    "status": "partial", "deleted_alias": None, "created_alias": None,
+                                    "created_alias_name": new_alias_name,
+                                    "steps_completed": steps_completed, "steps_failed": steps_failed,
+                                    "execution_time": f"{time.time() - start_time:.2f}s",
+                                    "error": "GMX Chrome window not found",
+                                }
                     except Exception:
                         steps_failed.append("cua_confirm_error")
+                        logger.warning("CUA confirm error — skip create")
+                        return {
+                            "status": "partial",
+                            "deleted_alias": None,
+                            "created_alias": None,
+                            "created_alias_name": new_alias_name,
+                            "steps_completed": steps_completed,
+                            "steps_failed": steps_failed,
+                            "execution_time": f"{time.time() - start_time:.2f}s",
+                            "error": "CUA confirm error",
+                        }
                 else:
                     steps_failed.append("trash_icon_not_found")
             else:
@@ -1767,9 +1818,11 @@ targets = await client.get_targets()
                     break
 
                 if current_url:
-                    logger.info(f"Verify miss — force-reload: {current_url[:80]}")
-                    await client.navigate(session_id, current_url)
-                    await asyncio.sleep(5)
+                    logger.info(f"Verify miss — full refresh cycle")
+                    await client.navigate(session_id, "https://www.gmx.net/")
+                    await asyncio.sleep(3)
+                    await client.navigate(session_id, "https://bap.navigator.gmx.net/mail_settings")
+                    await asyncio.sleep(6)
                     ok = await self._verify_alias_in_iframe(
                         client, session_id, current_alias_email,
                         present=True, max_wait_s=8.0,
