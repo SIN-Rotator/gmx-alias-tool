@@ -83,15 +83,22 @@ async def alias_rotate(request: GmxAliasCreateRequest):
         svc = get_gmx_service()
         svc.email = "opensin@gmx.de"
         svc.password = "ZOE.jerry2024"
-        result = await svc.rotate_alias(new_alias_name=request.alias_name, cdp_port=CDP_PORT)
+        del_result = await svc.delete_existing_alias(cdp_port=CDP_PORT)
+        create_result = await svc.create_alias(alias_name=request.alias_name, cdp_port=CDP_PORT)
         return GmxAliasResponse(
-            status=result.get("status", "error"),
-            alias_email=result.get("created_alias"),
-            alias_name=result.get("created_alias_name"),
-            steps_completed=result.get("steps_completed", []),
-            steps_failed=result.get("steps_failed", []),
+            status=create_result.get("status", "error"),
+            alias_email=create_result.get("alias_email"),
+            alias_name=create_result.get("alias_name"),
+            steps_completed=(
+                (del_result.get("steps_completed", []) if isinstance(del_result, dict) else []) +
+                (create_result.get("steps_completed", []) if isinstance(create_result, dict) else [])
+            ),
+            steps_failed=(
+                (del_result.get("steps_failed", []) if isinstance(del_result, dict) else []) +
+                (create_result.get("steps_failed", []) if isinstance(create_result, dict) else [])
+            ),
             execution_time=f"{time.time()-t0:.2f}s",
-            error=result.get("error"),
+            error=create_result.get("error") if create_result.get("status") != "success" else None,
         )
     except Exception as e:
         return GmxAliasResponse(status="error", execution_time=f"{time.time()-t0:.2f}s", error=str(e))
