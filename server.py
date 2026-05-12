@@ -25,6 +25,18 @@ async def _ensure_browser(cdp_port: int = CDP_PORT):
     except Exception:
         raise HTTPException(status_code=400, detail=f"Chrome nicht auf Port {cdp_port}. Starten: Chrome mit --remote-debugging-port={cdp_port}")
 
+async def _get_fresh_gmx_tab() -> GmxService:
+    from cdp_client import CDPClient
+    ws = await get_browser_ws_endpoint(CDP_PORT)
+    client = CDPClient(ws)
+    await client.connect()
+    r = await client.send("Target.createTarget", {"url": "https://www.gmx.net/"})
+    await client.disconnect()
+    svc = get_gmx_service()
+    svc.email = "opensin@gmx.de"
+    svc.password = "ZOE.jerry2024"
+    return svc
+
 @app.get("/health")
 async def health():
     try:
@@ -36,11 +48,8 @@ async def health():
 @app.post("/alias/create", response_model=GmxAliasResponse)
 async def alias_create(request: GmxAliasCreateRequest):
     t0 = time.time()
-    await _ensure_browser()
     try:
-        svc = get_gmx_service()
-        svc.email = "opensin@gmx.de"
-        svc.password = "ZOE.jerry2024"
+        svc = await _get_fresh_gmx_tab()
         if request.delete_existing:
             await svc.delete_existing_alias(cdp_port=CDP_PORT)
         result = await svc.create_alias(alias_name=request.alias_name, cdp_port=CDP_PORT)
@@ -59,11 +68,8 @@ async def alias_create(request: GmxAliasCreateRequest):
 @app.post("/alias/delete", response_model=GmxAliasDeleteResponse)
 async def alias_delete():
     t0 = time.time()
-    await _ensure_browser()
     try:
-        svc = get_gmx_service()
-        svc.email = "opensin@gmx.de"
-        svc.password = "ZOE.jerry2024"
+        svc = await _get_fresh_gmx_tab()
         result = await svc.delete_existing_alias(cdp_port=CDP_PORT)
         return GmxAliasDeleteResponse(
             status=result.get("status", "error"),
@@ -78,27 +84,17 @@ async def alias_delete():
 @app.post("/alias/rotate", response_model=GmxAliasResponse)
 async def alias_rotate(request: GmxAliasCreateRequest):
     t0 = time.time()
-    await _ensure_browser()
     try:
-        svc = get_gmx_service()
-        svc.email = "opensin@gmx.de"
-        svc.password = "ZOE.jerry2024"
-        del_result = await svc.delete_existing_alias(cdp_port=CDP_PORT)
-        create_result = await svc.create_alias(alias_name=request.alias_name, cdp_port=CDP_PORT)
+        svc = await _get_fresh_gmx_tab()
+        result = await svc.rotate_alias(new_alias_name=request.alias_name, cdp_port=CDP_PORT)
         return GmxAliasResponse(
-            status=create_result.get("status", "error"),
-            alias_email=create_result.get("alias_email"),
-            alias_name=create_result.get("alias_name"),
-            steps_completed=(
-                (del_result.get("steps_completed", []) if isinstance(del_result, dict) else []) +
-                (create_result.get("steps_completed", []) if isinstance(create_result, dict) else [])
-            ),
-            steps_failed=(
-                (del_result.get("steps_failed", []) if isinstance(del_result, dict) else []) +
-                (create_result.get("steps_failed", []) if isinstance(create_result, dict) else [])
-            ),
+            status=result.get("status", "error"),
+            alias_email=result.get("created_alias"),
+            alias_name=result.get("created_alias_name"),
+            steps_completed=result.get("steps_completed", []),
+            steps_failed=result.get("steps_failed", []),
             execution_time=f"{time.time()-t0:.2f}s",
-            error=create_result.get("error") if create_result.get("status") != "success" else None,
+            error=result.get("error"),
         )
     except Exception as e:
         return GmxAliasResponse(status="error", execution_time=f"{time.time()-t0:.2f}s", error=str(e))
@@ -106,11 +102,8 @@ async def alias_rotate(request: GmxAliasCreateRequest):
 @app.post("/session/check", response_model=GmxSessionCheckResponse)
 async def session_check():
     t0 = time.time()
-    await _ensure_browser()
     try:
-        svc = get_gmx_service()
-        svc.email = "opensin@gmx.de"
-        svc.password = "ZOE.jerry2024"
+        svc = await _get_fresh_gmx_tab()
         result = await svc.check_session(cdp_port=CDP_PORT)
         return GmxSessionCheckResponse(
             status=result.get("status", "unknown"),

@@ -135,17 +135,22 @@ class GmxService:
         await client.connect()
         
         # Finde das GMX Tab spezifisch — nicht einfach das erste Page-Target
-        targets = await client.get_targets()
+targets = await client.get_targets()
         target = None
-        
-        # Priorität 1: GMX Tab mit SID (eingeloggt)
-        for t in targets:
+
+        for t in reversed(targets):
             url = t.get("url", "")
             if t.get("type") == "page" and "sid=" in url and "gmx.net" in url:
                 target = t
                 break
-        
-        # Priorität 2: GMX Tab ohne SID
+
+        if not target:
+            for t in reversed(targets):
+                url = t.get("url", "")
+                if t.get("type") == "page" and "gmx.net" in url:
+                    target = t
+                    break
+
         if not target:
             target = await get_page_target(client, url_filter="gmx.net")
         
@@ -1356,8 +1361,8 @@ class GmxService:
         deadline = time.time() + max_wait_s
         while time.time() < deadline:
             result = await client.evaluate(session_id, f"""(function() {{
-                var bodyText = document.body.innerText;
-                return bodyText.indexOf({json.dumps(alias_email)}) >= 0;
+                var bodyHTML = document.body.innerHTML;
+                return bodyHTML.indexOf({json.dumps(alias_email)}) >= 0;
             }})()""", return_by_value=True)
             found = result.get("result", {}).get("value", False)
 
@@ -1505,12 +1510,13 @@ class GmxService:
                 if attempt == 0:
                     steps.append("clicked_add")
 
-                # Warten dass Seite nach form.submit() aktualisiert wird
-                await asyncio.sleep(3)
+                await asyncio.sleep(4)
 
-                # Verify: Server-State, nicht Input-State (siehe _verify_alias_in_iframe).
+                current_url_r = await client.evaluate(session_id, "window.location.href", return_by_value=True)
+                current_url = current_url_r.get("result", {}).get("value", "")
+
                 ok = await self._verify_alias_in_iframe(
-                    client, session_id, alias_email, present=True, max_wait_s=12.0,
+                    client, session_id, alias_email, present=True, max_wait_s=8.0,
                 )
                 if ok:
                     logger.info(f"Alias erstellt + server-verified: {alias_email}")
@@ -1521,6 +1527,23 @@ class GmxService:
                         "steps_completed": steps,
                         "execution_time": f"{time.time() - start_time:.2f}s",
                     }
+
+                if current_url:
+                    logger.info(f"Verify miss — force-reload page: {current_url[:80]}")
+                    await client.navigate(session_id, current_url)
+                    await asyncio.sleep(5)
+                    ok = await self._verify_alias_in_iframe(
+                        client, session_id, alias_email, present=True, max_wait_s=8.0,
+                    )
+                    if ok:
+                        logger.info(f"Alias server-verified after reload: {alias_email}")
+                        return {
+                            "status": "success",
+                            "alias_email": alias_email,
+                            "alias_name": current_alias,
+                            "steps_completed": steps,
+                            "execution_time": f"{time.time() - start_time:.2f}s",
+                        }
 
                 logger.warning(f"Alias nicht in Iframe-Liste sichtbar: {alias_email} — neuer Versuch")
                 await asyncio.sleep(1)
@@ -1728,17 +1751,35 @@ class GmxService:
                 if attempt == 0:
                     steps_completed.append("add_button_clicked")
 
-                # Verify: Iframe-Liste enthält jetzt "{alias}@gmx.de"
-                # (Server-State-Check, NICHT self-confirming Input-Such-Trick).
-                if await self._verify_alias_in_iframe(
+                await asyncio.sleep(4)
+
+                current_url_r = await client.evaluate(session_id, "window.location.href", return_by_value=True)
+                current_url = current_url_r.get("result", {}).get("value", "")
+                ok = await self._verify_alias_in_iframe(
                     client, session_id, current_alias_email,
                     present=True, max_wait_s=8.0,
-                ):
+                )
+                if ok:
                     created_alias_name = current_alias
                     created_alias = current_alias_email
                     alias_created = True
                     steps_completed.append("alias_created")
                     break
+
+                if current_url:
+                    logger.info(f"Verify miss — force-reload: {current_url[:80]}")
+                    await client.navigate(session_id, current_url)
+                    await asyncio.sleep(5)
+                    ok = await self._verify_alias_in_iframe(
+                        client, session_id, current_alias_email,
+                        present=True, max_wait_s=8.0,
+                    )
+                    if ok:
+                        created_alias_name = current_alias
+                        created_alias = current_alias_email
+                        alias_created = True
+                        steps_completed.append("alias_created")
+                        break
 
                 logger.warning(
                     f"Alias {current_alias_email} nicht in Iframe-Liste — generiere neuen Namen..."
