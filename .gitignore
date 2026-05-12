@@ -1,0 +1,7 @@
+.pid
+.server.pid
+.tunnel.pid
+.tunnel.log
+.tunnel_url
+__pycache__/
+*.pyc
