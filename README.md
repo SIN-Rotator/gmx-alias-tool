@@ -2,6 +2,8 @@
 
 CLI + API to create, delete, and rotate GMX FreeMail aliases via CUA + Playwright + CDP.
 
+**[📖 Installationsanleitung](INSTALL.md)** — Schritt-für-Schritt mit Prerequisites-Checks und Verifikation.
+
 ## Prerequisites
 
 - Chrome running with `--remote-debugging-port=9222`
